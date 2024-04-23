@@ -15,6 +15,7 @@ import pickle
 import shutil
 import pathlib
 import platform
+from collections import OrderedDict
 from copy import deepcopy
 from itertools import product
 
@@ -4096,6 +4097,54 @@ class TestSubclassSerialization(TestCase):
             torch.save(tensor, f)
             f.seek(0)
             tensor2 = torch.load(f)
+
+    def test_allowlist_for_weights_only(self):
+        # Doing the import here as this test later dels the import from sys.modules
+        from torch.testing._internal.two_tensor import TwoTensor
+        t = TwoTensor(torch.randn(2, 3), torch.randn(2, 3))
+        p = torch.nn.Parameter(t)
+        sd = OrderedDict([('t', t), ('p', p)])
+
+        with tempfile.NamedTemporaryFile() as f:
+            torch.save(sd, f)
+            # unimport TwoTensor
+            del sys.modules['torch.testing._internal.two_tensor']
+
+            # Loading tensor subclass with weights_only=True should fail
+            # if tensor subclass has not been imported
+            with self.assertRaisesRegex(pickle.UnpicklingError,
+                                        "`torch.testing._internal.two_tensor` was not found in `sys.modules`"):
+                f.seek(0)
+                sd = torch.load(f, weights_only=True)
+
+            # Loading tensor subclass with weights_only=True should work
+            # if __setstate__ and tp_alloc are not overriden and user has imported the subclass
+            from torch.testing._internal.two_tensor import TwoTensor
+            f.seek(0)
+            sd = torch.load(f, weights_only=True)
+            self.assertEqual(sd['t'], t)
+            self.assertEqual(sd['p'], p)
+
+            # Loading tensor subclass with weights_only=True should fail
+            # if __setstate__ is overriden
+            f.seek(0)
+            restore_setstate = TwoTensor.__setstate__
+            try:
+                TwoTensor.__setstate__ = lambda self, state: self.__dict__.update(state)
+                with self.assertRaisesRegex(pickle.UnpicklingError, "defined a custom `__setstate__`"):
+                    torch.load(f, weights_only=True)
+
+                # Loading tensor subclass with overriden __setstate__ with weights_only=True should work
+                # if the class is marked safe
+                f.seek(0)
+                torch.serialization.mark_safe_globals([TwoTensor])
+                sd = torch.load(f, weights_only=True)
+                self.assertEqual(sd['t'], t)
+                self.assertEqual(sd['p'], p)
+            finally:
+                TwoTensor.__setstate__ = restore_setstate
+
+
 
 
 instantiate_device_type_tests(TestBothSerialization, globals())
