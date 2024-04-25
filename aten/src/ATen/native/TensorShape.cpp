@@ -423,7 +423,15 @@ Tensor& set_storage_meta__symint(Tensor& result, Storage storage, c10::SymInt st
     const auto itemsize = result.dtype().itemsize();
     c10::SymInt new_size_bytes = at::detail::computeStorageNbytes(
         size, stride, itemsize, std::move(storage_offset));
-    if (TORCH_GUARD_SIZE_OBLIVIOUS(new_size_bytes.sym_gt(storage.sym_nbytes()))) {
+    // TODO: When there are unbacked SymInts, we unconditionally skip the
+    // setter.  This is technically wrong, but we cannot conveniently test
+    // the real condition in many cases, because a lot of people are using
+    // set_ just to swizzle metadata on a tensor, they didn't actually want
+    // to see if they need to resize the storage.
+    //
+    // The old behavior was to unconditionally set_nbytes, but I think not
+    // setting it is more safe.
+    if (new_size_bytes.has_hint() && storage.sym_nbytes().has_hint() && TORCH_GUARD_SIZE_OBLIVIOUS(new_size_bytes.sym_gt(storage.sym_nbytes()))) {
       storage.set_nbytes(std::move(new_size_bytes));
     }
   }
