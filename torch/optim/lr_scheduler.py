@@ -1,11 +1,11 @@
 import math
 import types
 import warnings
-import weakref
 from bisect import bisect_right
 from collections import Counter
-from functools import partial, wraps
+from functools import partial
 from typing import Optional, Sequence
+from weakref import ref
 
 from torch import inf
 
@@ -76,39 +76,34 @@ class LRScheduler:
         # Following https://github.com/pytorch/pytorch/issues/20124
         # We would like to ensure that `lr_scheduler.step()` is called after
         # `optimizer.step()`
-        def with_counter(method):
-            if getattr(method, "_with_counter", False):
-                # `optimizer.step()` has already been replaced, return.
-                return method
+        def patch_track_step_called(opt):
+            if hasattr(opt, "_wrapped_step"):
+                # we've already patched
+                return
+            opt._wrapped_step = True
 
-            # Keep a weak reference to the optimizer instance to prevent
-            # cyclic references.
-            instance_ref = weakref.ref(method.__self__)
-            # Get the unbound method for the same purpose.
-            func = method.__func__
-            cls = instance_ref().__class__
-            del method
+            def wrap_step(step_fn):
+                opt_ref = ref(self.optimizer)
+                step_ref = ref(step_fn)
+                func = step_fn.__func__
 
-            @wraps(func)
-            def wrapper(*args, **kwargs):
-                instance = instance_ref()
-                instance._step_count += 1
-                wrapped = func.__get__(instance, cls)
-                return wrapped(*args, **kwargs)
+                def wrapper(*args, **kwargs):
+                    opt = opt_ref()
+                    opt._opt_called = True
+                    return func.__get__(opt, opt.__class__)(*args, **kwargs)
 
-            # Note that the returned function here is no longer a bound method,
-            # so attributes like `__func__` and `__self__` no longer exist.
-            wrapper._with_counter = True
-            return wrapper
+                # Include this for BC (see where it is used below)
+                wrapper._with_counter = True
+                return wrapper
 
-        self.optimizer.step = with_counter(self.optimizer.step)
+            opt.step = wrap_step(opt.step)
+
+        patch_track_step_called(self.optimizer)
         self.verbose = _check_verbose_deprecated_warning(verbose)
-
         self._initial_step()
 
     def _initial_step(self):
         """Initialize step counts and performs a step"""
-        self.optimizer._step_count = 0
         self._step_count = 0
         self.step()
 
@@ -164,7 +159,7 @@ class LRScheduler:
                 )
 
             # Just check if there were two first lr_scheduler.step() calls before optimizer.step()
-            elif self.optimizer._step_count < 1:
+            elif getattr(self.optimizer, "_step_called", False):
                 warnings.warn(
                     "Detected call of `lr_scheduler.step()` before `optimizer.step()`. "
                     "In PyTorch 1.1.0 and later, you should call them in the opposite order: "
