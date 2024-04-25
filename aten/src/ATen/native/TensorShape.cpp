@@ -421,14 +421,10 @@ Tensor& set_storage_meta__symint(Tensor& result, Storage storage, c10::SymInt st
     // it.  TODO: Actually this might not quite be correct if we use special
     // pointers to track whether or not fake cuda tensors are pinned or not
     const auto itemsize = result.dtype().itemsize();
-    c10::SymInt size_bytes = at::detail::computeStorageNbytes(
+    c10::SymInt new_size_bytes = at::detail::computeStorageNbytes(
         size, stride, itemsize, std::move(storage_offset));
-    bool should_resize = true;
-    if (size_bytes.has_hint() && storage.sym_nbytes().has_hint()) {
-      should_resize = size_bytes > storage.sym_nbytes();
-    }
-    if (should_resize) {
-      storage.set_nbytes(std::move(size_bytes));
+    if (TORCH_GUARD_SIZE_OBLIVIOUS(new_size_bytes.sym_gt(storage.sym_nbytes()))) {
+      storage.set_nbytes(std::move(new_size_bytes));
     }
   }
   return result;
