@@ -1344,6 +1344,11 @@ EXPECTED_SKIPS_OR_FAILS_WITH_DTYPES: Tuple[onnx_test_common.DecorateMeta, ...] =
         "svd",
         reason="fixme: Test sets are too many.",
     ),
+    xfail(
+        "index_add",
+        dtypes=(torch.int64, torch.int32, torch.bool,),
+        reason=onnx_test_common.reason_onnx_runtime_does_not_support("ScatterND", "int64, int32, bool"),
+    ),
 )
 # fmt: on
 
@@ -1415,8 +1420,10 @@ SKIP_XFAIL_SUBTESTS_WITH_MATCHER_AND_MODEL_TYPE: tuple[
     ),
     xfail(
         "index_add",
-        matcher=lambda sample: len(sample.input.shape) < 2,
-        reason="fixme: https://github.com/microsoft/onnxscript/issues/1212",
+        matcher=lambda sample: len(sample.input.shape) == 0,
+        reason=onnx_test_common.reason_onnx_runtime_does_not_support(
+            "ScatterND", "0-D tensor"
+        ),
     ),
     xfail(
         "index_add",
