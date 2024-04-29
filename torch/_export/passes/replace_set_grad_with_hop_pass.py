@@ -160,7 +160,58 @@ def _sequential_split_and_maybe_inline_subgraphs(gm: torch.fx.GraphModule):
     return gm
 
 
-def replace_set_grad_with_hop_pass(gm: torch.fx.GraphModule):
+def replace_set_grad_with_hop_pass(gm: torch.fx.GraphModule, graph_signature):
+    original_output_nodes = ()
+    for node in gm.graph.nodes:
+        if node.op == "output":
+            original_output_nodes = node.args
+
+    gm = _replace_set_grad_with_hop_pass(gm)
+
+    updated_output_nodes = ()
+    for node in gm.graph.nodes:
+        if node.op == "output":
+            updated_output_nodes = node.args
+
+    # It could be updated because replace_set_grad_with_hop_pass adds new
+    # getitem nodes into the graph.
+    assert len(original_output_nodes) == len(updated_output_nodes)
+    old_output_name_to_new_output_name = {}
+    for k, v in zip(*original_output_nodes, *updated_output_nodes):
+        if isinstance(k, torch.fx.Node) and isinstance(k, torch.fx.Node):
+            old_output_name_to_new_output_name[k.name] = v.name
+        # If there is constant return in the end, it should be true for updated outputs too
+        else:
+            constant_types = (int, float, str, type(None))
+            assert k == v
+            assert isinstance(k, constant_types)
+
+    buffers_to_mutate_copy = graph_signature.buffers_to_mutate.copy()
+    user_inputs_to_mutate_copy = graph_signature.user_inputs_to_mutate.copy()
+    for k in old_output_name_to_new_output_name:
+        if k in graph_signature.buffers_to_mutate:
+            graph_signature.buffers_to_mutate[
+                old_output_name_to_new_output_name[k]
+            ] = buffers_to_mutate_copy[k]
+            if k not in old_output_name_to_new_output_name.values():
+                del graph_signature.buffers_to_mutate[k]
+
+        if k in graph_signature.user_inputs_to_mutate:
+            graph_signature.user_inputs_to_mutate[
+                old_output_name_to_new_output_name[k]
+            ] = user_inputs_to_mutate_copy[k]
+            if k not in old_output_name_to_new_output_name.values():
+                del graph_signature.user_inputs_to_mutate[k]
+
+    for i, k in enumerate(graph_signature.user_outputs):
+        if k in old_output_name_to_new_output_name:
+            new_k = old_output_name_to_new_output_name[k]
+            graph_signature.user_outputs[i] = new_k
+
+    return gm, graph_signature
+
+
+def _replace_set_grad_with_hop_pass(gm: torch.fx.GraphModule):
     new_gm = _sequential_split_and_maybe_inline_subgraphs(gm)
 
     # recursively call
@@ -169,7 +220,7 @@ def replace_set_grad_with_hop_pass(gm: torch.fx.GraphModule):
             subgm = getattr(new_gm, node.target)
             if not isinstance(subgm, torch.fx.GraphModule):
                 continue
-            new_subgm = replace_set_grad_with_hop_pass(subgm)
+            new_subgm = _replace_set_grad_with_hop_pass(subgm)
             setattr(new_gm, node.target, new_subgm)
 
     new_gm.recompile()

@@ -539,7 +539,7 @@ def _export_non_strict(
             replace_set_grad_with_hop_pass,
         )
 
-        gm = replace_set_grad_with_hop_pass(gm)
+        gm, graph_signature = replace_set_grad_with_hop_pass(gm, graph_signature)
 
     # Remove nn_module_stack, stack_trace metadata from all placeholders/inputs nodes.
     for _mod in gm.modules():
